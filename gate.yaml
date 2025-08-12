@@ -1,0 +1,6 @@
+---
+
+global_freeze: false
+
+frozen_repositories:
+ - jhollowayjc/merge-gate-demo-frozen

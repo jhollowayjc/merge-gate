@@ -1,0 +1,67 @@
+name: 'Check Deploy Status'
+description: 'Checks if a repository is blocked from merging.'
+
+# Define the inputs the action accepts.
+inputs:
+  repository_name:
+    description: "The full name of the repository to check (e.g., github.repository )."
+    required: true
+
+# Define the outputs the action produces.
+outputs:
+  is_blocked:
+    description: '"true" if the repository is blocked, otherwise "false".'
+    value: ${{ steps.check.outputs.is_blocked }}
+
+runs:
+  # Use a 'composite' runner to execute a series of steps directly.
+  using: 'composite'
+  steps:
+    # This step installs 'yq', a lightweight command-line YAML processor.
+    - name: Install yq
+      run: |
+        sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq
+        sudo chmod +x /usr/bin/yq
+      shell: bash
+
+    - name: Check Freeze Status
+      id: check
+      run: |
+        # The action runs in a checkout of this 'deploy-status' repository,
+        # so we can reference files directly.
+        CONFIG_FILE="${{ github.action_path }}/gate.yaml"
+
+        echo "---- Merge Gate Status Check ----"
+        echo "Checking status for repository: ${{ inputs.repository_name }}"
+        echo "Using configuration file: $CONFIG_FILE"
+
+        if [ ! -f "$CONFIG_FILE" ]; then
+          echo "::error::Configuration file not found at $CONFIG_FILE. Blocking merge."
+          # Set output and exit with a failure code.
+          echo "is_blocked=true" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+        # 1. Check for a global freeze.
+        # We use 'yq' to parse the YAML file.
+        GLOBAL_FREEZE=$(yq e '.global_freeze' "$CONFIG_FILE")
+        if [ "$GLOBAL_FREEZE" = "true" ]; then
+          echo "::error::GLOBAL FREEZE is active. All merges are currently blocked."
+          echo "is_blocked=true" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+        # 2. Check if the specific repository is in the blocked list.
+        # The yq query searches the 'blocked_repositories' array for a match.
+        # It will output the repo name if found, or an empty string if not.
+        FROZEN_REPO=$(yq e '.frozen_repositories[] | select(. == "${{ inputs.repository_name }}")' "$CONFIG_FILE")
+
+        if [ -n "$FROZEN_REPO" ]; then
+          echo "::error::Repository '${{ inputs.repository_name }}' is specifically blocked from merging."
+          echo "is_blocked=true" >> $GITHUB_OUTPUT
+          exit 1
+        else
+          echo "✅ Repository '${{ inputs.repository_name }}' is clear to merge."
+          echo "is_blocked=false" >> $GITHUB_OUTPUT
+        fi
+      shell: bash
